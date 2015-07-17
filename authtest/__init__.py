@@ -1,13 +1,14 @@
 from pyramid.config import Configurator
 from pyramid.security import remember
 from pyramid.httpexceptions import HTTPFound
+from pyramid.authentication import AuthTktAuthenticationPolicy
+from pyramid.authorization import ACLAuthorizationPolicy
 
 def remember_callback(request, response):
     if request.authenticated_userid is None: return
     extra_headers = remember(request, request.authenticated_userid)
     response.headerlist.extend(extra_headers)
 
-from pyramid.authentication import AuthTktAuthenticationPolicy
 class MyAuthenticationPolicy(AuthTktAuthenticationPolicy):
     def unauthenticated_userid(self, request):
         if 'token' in request.GET:
@@ -24,18 +25,45 @@ class MyAuthenticationPolicy(AuthTktAuthenticationPolicy):
         # fall back to parent's algorithm
         return super().unauthenticated_userid(request)
 
-def main(global_config, **settings):
-    """ This function returns a Pyramid WSGI application.
-    """
-    config = Configurator(settings=settings)
 
-    from pyramid.authorization import ACLAuthorizationPolicy
+def handle_token_query(event):
+    request = event.request
+    if 'token' in request.GET:
+        username = request.GET.pop('token')
+        headers = remember(request, username)
+        # generates a redirect to the same url but without the token (else we would enter an infinite loop...)
+        raise HTTPFound(headers=headers, location=request.path_qs)
 
+
+def setup_auth_with_redirect(config):
+    authn_policy = AuthTktAuthenticationPolicy('abcdef123456', hashalg='sha512', callback=user_groups)
+    authz_policy = ACLAuthorizationPolicy()
+
+    config.set_authentication_policy(authn_policy)
+    config.set_authorization_policy(authz_policy)
+
+    config.add_subscriber(handle_token_query, 'pyramid.events.NewRequest')
+
+def setup_auth_with_policy(config):
     authn_policy = MyAuthenticationPolicy('abcdef123456', hashalg='sha512', callback=user_groups)
     authz_policy = ACLAuthorizationPolicy()
 
     config.set_authentication_policy(authn_policy)
     config.set_authorization_policy(authz_policy)
+
+def main(global_config, **settings):
+    """ This function returns a Pyramid WSGI application.
+    """
+    config = Configurator(settings=settings)
+
+    auth_mode = settings.get('auth_mode')
+    if auth_mode == 'redirect':
+        setup_auth_with_redirect(config)
+    elif auth_mode == 'policy':
+        setup_auth_with_policy(config)
+    else:
+        raise ValueError('auth_mode')
+    print('Set up authentication via "%s"' % auth_mode)
 
     config.add_route('home', '/')
     config.add_route('logout', '/logout')
