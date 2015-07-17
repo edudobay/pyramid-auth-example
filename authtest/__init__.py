@@ -2,21 +2,36 @@ from pyramid.config import Configurator
 from pyramid.security import remember
 from pyramid.httpexceptions import HTTPFound
 
+def get_remember_callback(extra_headers):
+    def remember_callback(request, response):
+        response.headerlist.extend(extra_headers)
+
+    return remember_callback
+
+from pyramid.authentication import AuthTktAuthenticationPolicy
+class MyAuthenticationPolicy(AuthTktAuthenticationPolicy):
+    def unauthenticated_userid(self, request):
+        if 'token' in request.GET:
+            username = request.GET.pop('token')
+            headers = remember(request, username)
+            request.add_response_callback(get_remember_callback(headers))
+            return username
+
+        # fall back to parent's algorithm
+        return super().unauthenticated_userid(request)
+
 def main(global_config, **settings):
     """ This function returns a Pyramid WSGI application.
     """
     config = Configurator(settings=settings)
 
-    from pyramid.authentication import AuthTktAuthenticationPolicy
     from pyramid.authorization import ACLAuthorizationPolicy
 
-    authn_policy = AuthTktAuthenticationPolicy('abcdef123456', hashalg='sha512', callback=user_groups)
+    authn_policy = MyAuthenticationPolicy('abcdef123456', hashalg='sha512', callback=user_groups)
     authz_policy = ACLAuthorizationPolicy()
 
     config.set_authentication_policy(authn_policy)
     config.set_authorization_policy(authz_policy)
-
-    config.add_subscriber(handle_request, 'pyramid.events.NewRequest')
 
     config.add_route('home', '/')
     config.add_route('logout', '/logout')
@@ -31,12 +46,4 @@ def user_groups(username, request):
     if username.startswith('a'):
         return ['group:admin']
     return []
-
-def handle_request(event):
-    request = event.request
-    if 'token' in request.GET:
-        username = request.GET.pop('token')
-        headers = remember(request, username)
-        # generates a redirect to the same url but without the token (else we would enter an infinite loop...)
-        raise HTTPFound(headers=headers, location=request.path_qs)
 
