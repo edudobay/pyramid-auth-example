@@ -2,20 +2,24 @@ from pyramid.config import Configurator
 from pyramid.security import remember
 from pyramid.httpexceptions import HTTPFound
 
-def get_remember_callback(extra_headers):
-    def remember_callback(request, response):
-        response.headerlist.extend(extra_headers)
-
-    return remember_callback
+def remember_callback(request, response):
+    if request.authenticated_userid is None: return
+    extra_headers = remember(request, request.authenticated_userid)
+    response.headerlist.extend(extra_headers)
 
 from pyramid.authentication import AuthTktAuthenticationPolicy
 class MyAuthenticationPolicy(AuthTktAuthenticationPolicy):
     def unauthenticated_userid(self, request):
         if 'token' in request.GET:
             username = request.GET.pop('token')
-            headers = remember(request, username)
-            request.add_response_callback(get_remember_callback(headers))
+            request.add_response_callback(remember_callback)
+            request._unauthenticated_userid = username
             return username
+
+        # We must really keep the first time apart or else the callback will be
+        # added multiple times
+        elif hasattr(request, '_unauthenticated_userid'):
+            return request._unauthenticated_userid
 
         # fall back to parent's algorithm
         return super().unauthenticated_userid(request)
